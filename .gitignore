@@ -2,7 +2,7 @@
 RawData/
 SortedRawData/
 ProcessedData/
-
+*.DS_Store
 
 # Created by https://www.toptal.com/developers/gitignore/api/python,venv,pycharm
 # Edit at https://www.toptal.com/developers/gitignore?templates=python,venv,pycharm
@@ -295,3 +295,4 @@ pyvenv.cfg
 pip-selfcheck.json
 
 # End of https://www.toptal.com/developers/gitignore/api/python,venv,pycharm
+.gitignore
