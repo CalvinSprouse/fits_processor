@@ -138,7 +138,8 @@ def create_master_flats(raw_images: ccdproc.ImageFileCollection, raw_data_path: 
         # create the master flat with a median combine, bias subtraction, and dark subtraction from master files
         master_flat = ccdproc.combine(raw_list, method="median", unit="adu")
         master_flat = ccdproc.subtract_bias(master_flat, master_bias)
-        master_flat = ccdproc.subtract_dark(master_flat, master_darks_dict[exp_time_to_str(flat_time)], dark_exposure=flat_time * units.second, data_exposure=flat_time * units.second)
+        master_flat = ccdproc.subtract_dark(master_flat, master_darks_dict[exp_time_to_str(flat_time)], 
+                                            dark_exposure=flat_time * units.second, data_exposure=flat_time * units.second)
         master_flat.write(master_filename, overwrite=overwrite)
 
         # save the master flat to the flat dictionary
@@ -148,8 +149,8 @@ def create_master_flats(raw_images: ccdproc.ImageFileCollection, raw_data_path: 
     
     return master_flats
 
-def reduce_raw_lights(raw_images: ccdproc.ImageFileCollection, raw_data_path:Path, processed_data_path: Path, master_bias: CCDData, master_darks: dict, master_flats: dict):
-    # reduce lights
+def reduce_raw_lights(raw_images: ccdproc.ImageFileCollection, raw_data_path:Path, processed_data_path: Path, 
+                      master_bias: CCDData, master_darks: dict, master_flats: dict):
     # get all unique objects
     objects_list = set([CCDData.read(l, unit="adu").meta.get("OBJECT") for l in raw_images.files_filtered(IMTYPE="Light", include_path=True)])
 
@@ -177,7 +178,8 @@ def reduce_raw_lights(raw_images: ccdproc.ImageFileCollection, raw_data_path:Pat
 
             # create a reduced light by subtracting bias, darks, and doing a flat division
             reduced = ccdproc.subtract_bias(ccd_image, master_bias)
-            reduced = ccdproc.subtract_dark(reduced, master_darks[exposure_string], dark_exposure=exposure_time * units.second, data_exposure=exposure_time * units.second)
+            reduced = ccdproc.subtract_dark(reduced, master_darks[exposure_string], 
+                                            dark_exposure=exposure_time * units.second, data_exposure=exposure_time * units.second)
             reduced = ccdproc.flat_correct(reduced, master_flats[image_filter])
             reduced.write(reduced_filename, overwrite=True)
 
@@ -205,7 +207,6 @@ def calibrate_and_reduce(raw_data_path: str, processed_data_path: str, overwrite
     reduce_raw_lights(raw_images, raw_data_path, processed_data_path, master_bias, master_darks, master_flats)
 
 # TODO: Fill out filter list
-# TODO: Sort functions better, i dont like the passing many of the same parameters (feels weird)
 
 if __name__ == "__main__":
     # get arguments from command line
