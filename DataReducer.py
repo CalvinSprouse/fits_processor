@@ -82,7 +82,7 @@ class ImageReducer():
         self.master_bias = ccdproc.combine(raw_biases, method="median", unit="adu")
 
         # catch the file already exists error
-        self._safe_write_ccddata(self.master_bias, master_filename)
+        self._safe_write_ccddata(self.master_bias, master_filename, overwrite)
 
         log.info(f"Created Master Bias from {len(raw_biases)} images -> {master_filename}")
         return self.master_bias
