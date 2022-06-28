@@ -31,10 +31,10 @@ log.addHandler(file_handler)
 
 def exp_time_to_str(exposure_time) -> str:
     """Convert an exposure time to string, used to normalize between formats"""
-    if int(exposure_time) == exposure_time: 
+    if int(exposure_time) == exposure_time:
         # checks for an integer exposure time greater than 1
         return str(int(exposure_time)) + "s"
-    elif int(exposure_time*1000) == exposure_time*1000: 
+    elif int(exposure_time*1000) == exposure_time*1000:
         # checks for an in integer exposure time in milliseconds
         return str(int(exposure_time*1000)) + "ms"
     return str(exposure_time)
@@ -42,6 +42,9 @@ def exp_time_to_str(exposure_time) -> str:
 
 class ImageReducer():
     def __init__(self, raw_data_dir: str, processed_data_dir: str) -> None:
+        # configurations
+        self.filter_list = ["R", "B", "G", "BR", "BG", "BB", "I", "H3", "S2", "HA", "HB", "CLEAR"]
+
         # define paths
         self.raw_data_path = Path(raw_data_dir).absolute()
         self.processed_data_path = Path(processed_data_dir).absolute()
@@ -53,28 +56,48 @@ class ImageReducer():
 
         # ensure processed directory exists
         os.makedirs(self.processed_data_path, exist_ok=True)
-        
+
         # place holders for master calibration files
         self.master_bias = None
         self.master_darks = None
         self.master_flats = None
 
-   
+
     def create_master_bias(self, overwrite: bool = False) -> CCDData:
+        """Create a master bias from all biases found in RawDataDir.
+
+        Args:
+            overwrite (bool, optional): Set to True to overwrite files in ProcessedDataDir. Defaults to False.
+
+        Returns:
+            CCDData: Returns the master bias.
+        """
+
         # sort out biases from other images by IMTYPE
         raw_biases = self.raw_images.files_filtered(IMTYPE="Bias", include_path=True)
         # define the master file save path
-        master_filename = os.path.join(self.processed_data_path, "MasterBias.fits") 
+        master_filename = os.path.join(self.processed_data_path, "MasterBias.fits")
 
         # combine and save biases using a median combine TODO: Make configurable
         self.master_bias = ccdproc.combine(raw_biases, method="median", unit="adu")
-        self.master_bias.write(master_filename, overwrite=overwrite)
+
+        # catch the file already exists error
+        self._safe_write_ccddata(self.master_bias, master_filename)
 
         log.info(f"Created Master Bias from {len(raw_biases)} images -> {master_filename}")
         return self.master_bias
-    
-    
+
+
     def create_master_darks(self, overwrite: bool = False) -> dict:
+        """Create darks for each set of exposure times found in RawDataDir.
+
+        Args:
+            overwrite (bool, optional): Set to True to overwrite files in ProcessedDataDir. Defaults to False.
+
+        Returns:
+            dict: Returns a dict of exposure time to master dark for flat division and raw reduction.
+        """
+
         # ensure master biases have been made
         if not self.master_bias:
             log.warning("Create master darks run before create master biases.")
@@ -82,6 +105,8 @@ class ImageReducer():
 
         # find all unique exposure times
         dark_times = set([CCDData.read(t, unit="adu").meta.get("EXPTIME") for t in list(self.raw_images.files_filtered(IMTYPE="Dark", include_path=True))])
+
+        # prepare output dict
         self.master_darks = {}
 
         # each unique time gets a master dark which is saved to the dictionary
@@ -94,24 +119,34 @@ class ImageReducer():
 
             # combine and save darks using a median combine
             master_dark = ccdproc.combine(selected_darks, method="median", unit="adu")
-            master_dark.write(master_filename, overwrite=overwrite)
+
+            # catch the file exists error when writing and log -> exit
+            self._safe_write_ccddata(master_dark, master_filename, overwrite)
 
             # save the master dark to the dark dictionary
             self.master_darks[save_time] = CCDData.read(master_filename)
 
             log.info(f"Created {save_time} Master Dark from {len(selected_darks)} images -> {master_filename}")
         return self.master_darks
-    
-    
+
+
     def create_master_flats(self, overwrite: bool = False) -> dict:
+        """Create master flats for each filter if there exists a dark with the same exposure time. Only accepts specific filters.
+
+        Args:
+            overwrite (bool, optional): Set to True to overwrite files in ProcessedDataDir. Defaults to False.
+
+        Returns:
+            dict: Returns a dict of filter to master_flat for raw reduction.
+        """
+
         # ensure master darks (and therefore master biases) have been created
         if not self.master_darks:
             log.warning("Create master flats run before create master darks.")
             self.create_master_darks()
 
         # list from the filter format above (WIP)
-        # TODO: Fill flats list or allow a custom list to be provided
-        raw_flats = {f:[] for f in ["R", "B", "G", "BR", "BG", "BB", "I", "H3", "S2", "HA", "HB", "CLEAR"]}
+        raw_flats = {f:[] for f in self.filter_list}
 
         # sort raw flats into the raw flats dict using above formatting (index 1 = filter)
         for flat in list(self.raw_images.files_filtered(IMTYPE="Flat")) + list(self.raw_images.files_filtered(IMTYPE="Sky")):
@@ -141,9 +176,9 @@ class ImageReducer():
             # create the master flat with a median combine, bias subtraction, and dark subtraction from master files
             master_flat = ccdproc.combine(raw_list, method="median", unit="adu")
             master_flat = ccdproc.subtract_bias(master_flat, self.master_bias)
-            master_flat = ccdproc.subtract_dark(master_flat, self.master_darks_dict[exp_time_to_str(flat_time)], 
+            master_flat = ccdproc.subtract_dark(master_flat, self.master_darks_dict[exp_time_to_str(flat_time)],
                                                 dark_exposure=flat_time * units.second, data_exposure=flat_time * units.second)
-            master_flat.write(master_filename, overwrite=overwrite)
+            self._safe_write_ccddata(master_flat, master_filename, overwrite)
 
             # save the master flat to the flat dictionary
             self.master_flats[flat_filter] = CCDData.read(master_filename)
@@ -153,12 +188,24 @@ class ImageReducer():
 
 
     def create_calibration_images(self, overwrite: bool = False) -> None:
+        """Creates master biases, darks, and flats.
+
+        Args:
+            overwrite (bool, optional): Set to True to overwrite files in ProcesedDataDir. Defaults to False.
+        """
+
         self.create_master_bias(overwrite=overwrite)
         self.create_master_darks(overwrite=overwrite)
         self.create_master_flats(overwrite=overwrite)
 
 
-    def reduce_raw_lights(self, overwrite: bool = False):
+    def reduce_raw_lights(self, overwrite: bool = False) -> None:
+        """Reduce files of IMTYPE=Light found in the RawDataDir
+
+        Args:
+            overwrite (bool, optional): Set to True if you want to overwrite files in ProcessedDataDir. Defaults to False.
+        """
+
         # get all unique objects
         objects_list = set([CCDData.read(l, unit="adu").meta.get("OBJECT") for l in self.raw_images.files_filtered(IMTYPE="Light", include_path=True)])
 
@@ -171,10 +218,10 @@ class ImageReducer():
             for image in self.raw_images.files_filtered(IMTYPE="Light", OBJECT=obj_observed):
                 # read the light as ccddata
                 ccd_image = CCDData.read(os.path.join(self.raw_data_path, image), unit="adu")
-                
+
                 # define the save path
                 reduced_filename = os.path.join(obj_save_dir, "Reduced_" + image)
-                
+
                 # get exposure and filter from ccd data to access the dark/filters dicts
                 exposure_time = ccd_image.meta.get("EXPTIME")
                 exposure_string = exp_time_to_str(exposure_time)
@@ -190,12 +237,30 @@ class ImageReducer():
 
                 # create a reduced light by subtracting bias, darks, and doing a flat division
                 reduced = ccdproc.subtract_bias(ccd_image, self.master_bias)
-                reduced = ccdproc.subtract_dark(reduced, self.master_darks[exposure_string], 
+                reduced = ccdproc.subtract_dark(reduced, self.master_darks[exposure_string],
                                                 dark_exposure=exposure_time * units.second, data_exposure=exposure_time * units.second)
                 reduced = ccdproc.flat_correct(reduced, self.master_flats[image_filter])
                 reduced.write(reduced_filename, overwrite=overwrite)
 
                 log.info(f"Reduced {image} using {image_filter} Filter {exposure_string} Exposure {obj_name} Object -> {reduced_filename}")
+
+
+    def _safe_write_ccddata(self, fits: CCDData, filename: str, overwrite: bool = False) -> CCDData:
+        """Atttempt to write a .fits file and handle errors.
+
+        Args:
+            overwrite (bool, optional): Set to True to overwrite a .fits that exists. Defaults to False.
+
+        Returns:
+            CCDData: Return the .fits file.
+        """
+
+        try:
+            fits.write(filename, overwrite=overwrite)
+        except OSError as e:
+            log.error(f"File {filename} already exists and overwrite={overwrite}.")
+            exit()
+        return fits
 
 
 if __name__ == "__main__":
@@ -219,14 +284,14 @@ if __name__ == "__main__":
     - H Beta = HB
     - H Alpha = HA
     """
-    
+
     # get arguments from command line
     parser = argparse.ArgumentParser()
-    parser.add_argument("RawDataDir", type=str, 
+    parser.add_argument("RawDataDir", type=str,
                         help="Path to the folder containing your raw fits files. (Can be relative)")
-    parser.add_argument("ProcessedDataDir", type=str, 
+    parser.add_argument("ProcessedDataDir", type=str,
                         help="Path to the folder you want saved data to go. (WARNING: May overwrite existing data)")
-    parser.add_argument("-o", "--overwrite", action="store_true", 
+    parser.add_argument("-o", "--overwrite", action="store_true",
                         help="True if you want to overwrite existing files with the same name. (default: false)")
     args = parser.parse_args().__dict__
 
