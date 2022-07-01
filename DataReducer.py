@@ -104,7 +104,7 @@ class ImageReducer():
             self.create_master_bias()
 
         # find all unique exposure times
-        dark_times = set([CCDData.read(t, unit="adu").meta.get("EXPTIME") for t in list(self.raw_images.files_filtered(IMTYPE="Dark", include_path=True))])
+        dark_times = set([CCDData.read(a, unit="adu").meta.get("EXPTIME") for a in list(self.raw_images.files_filtered(IMTYPE="Dark", include_path=True))])
 
         # prepare output dict
         self.master_darks = {}
@@ -176,7 +176,7 @@ class ImageReducer():
             # create the master flat with a median combine, bias subtraction, and dark subtraction from master files
             master_flat = ccdproc.combine(raw_list, method="median", unit="adu")
             master_flat = ccdproc.subtract_bias(master_flat, self.master_bias)
-            master_flat = ccdproc.subtract_dark(master_flat, self.master_darks_dict[exp_time_to_str(flat_time)],
+            master_flat = ccdproc.subtract_dark(master_flat, self.master_darks[exp_time_to_str(flat_time)],
                                                 dark_exposure=flat_time * units.second, data_exposure=flat_time * units.second)
             self._safe_write_ccddata(master_flat, master_filename, overwrite)
 
@@ -211,7 +211,7 @@ class ImageReducer():
 
         for obj_observed in objects_list:
             # get the observed object for creating the save dir and sorting images
-            obj_name = obj_observed.strip().replace(" ", "")
+            obj_name = obj_observed.strip().replace(" ", "") # TODO: filter *-/\.
             obj_save_dir = os.path.join(self.processed_data_path, obj_name)
             os.makedirs(obj_save_dir, exist_ok=True)
 
@@ -225,15 +225,17 @@ class ImageReducer():
                 # get exposure and filter from ccd data to access the dark/filters dicts
                 exposure_time = ccd_image.meta.get("EXPTIME")
                 exposure_string = exp_time_to_str(exposure_time)
-                image_filter = image.split("_")[1].upper()
+                image_filter = image.split("_")[1].upper() # TODO: Replace with fits header
 
                 # ensure the exposure time has been processed
-                if exposure_string not in self.master_darks:
+                if exposure_string not in self.master_darks: # TODO: Add dark scaling as backup
                     log.error(f"No dark for the exposure taken ({exposure_string}). Light: {image}")
+                    exit()
 
                 # ensure the filter has been processed
                 if image_filter not in self.master_flats:
                     log.error(f"No flat for the filter taken ({image_filter}). Light: {image}")
+                    exit()
 
                 # create a reduced light by subtracting bias, darks, and doing a flat division
                 reduced = ccdproc.subtract_bias(ccd_image, self.master_bias)
