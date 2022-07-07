@@ -2,12 +2,10 @@ import argparse
 import logging
 import os
 import shutil
-import time
 import warnings
 from pathlib import Path
 
 import ccdproc
-from astropy import units
 
 from astropy.nddata import CCDData
 from astropy.utils.exceptions import AstropyWarning
@@ -17,7 +15,7 @@ from rich.logging import RichHandler
 warnings.filterwarnings("ignore", category=AstropyWarning, append=True)
 
 # configure loggers one for terminal one for file errors
-log = logging.Logger(name="DataReducerLog")
+log = logging.Logger(name="DataFilterLog")
 formatter = logging.Formatter("%(name)s|%(asctime)s|[%(levelname)s]|:%(message)s")
 log.setLevel(logging.INFO)
 
@@ -31,7 +29,7 @@ log.addHandler(stream_handler)
 log.addHandler(file_handler)
 
 
-def sort_fits(dir: str, keyword: str):
+def sort_fits(dir: str, keyword: str, delete_original: bool = True):
     for file in ccdproc.ImageFileCollection(dir).files_filtered():
         # get fits header and keyword entry
         fits = CCDData.read(os.path.join(dir, file)).copy()
@@ -45,8 +43,12 @@ def sort_fits(dir: str, keyword: str):
             os.makedirs(keyword_dirname, exist_ok=True)
 
             # move file
-            log.info(f"Moved {file}")
-            shutil.move(os.path.join(dir, file), os.path.join(keyword_dirname, file))
+            if delete_original:
+                log.info(f"Moved {file}")
+                shutil.move(os.path.join(dir, file), os.path.join(keyword_dirname, file))
+            else:
+                log.info(f"Copied {file}")
+                shutil.copyfile(os.path.join(dir, file), os.path.join(keyword_dirname, file))
         else:
             log.warning(f"Keyword {keyword} not found in {file}. Skipping.")
     log.info(f"All files moved from {dir}.")
@@ -57,14 +59,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("DataDir", type=str,
                         help="Path to the folder containing your raw fits files. (Can be relative)")
-    parser.add_argument("SortKeyword", type=str,
+    parser.add_argument("SortKeyword1", type=str,
                         help="Keyword in FITS header to sort by.")
     parser.add_argument("-s", "--save-original", action="store_true",
                         help="Set to True to not delete original files.")
-    # parser.add_argument("-o", "--overwrite", action="store_true",
-    #                     help="True if you want to overwrite existing files with the same name. (default: false)")
-    # parser.add_argument("-n", "--name", action="store_true",
-    #                     help="Renames files based on fits header data when doing light reduction.")
     args = parser.parse_args().__dict__
 
     # ensure theres is raw data to sort
@@ -72,14 +70,7 @@ if __name__ == "__main__":
         log.error(f"User specified path {args['DataDir']} does not exist.")
         exit()
 
-    # warn about options
-    # if args["name"]:
-    #     log.warning(f"File Renaming is unstable and not guaranteed to work, it should only be used when all files are known to end in _###.fits and the header OBJECT is correct.")
-
-    # if args["overwrite"]:
-    #     log.warning(f"Files will be overwritten.")
-
     # run calibrate and reduce code
     data_dir = Path(args["DataDir"]).absolute()
     keyword = args["SortKeyword"].strip().upper()
-    sort_fits(data_dir, keyword)
+    sort_fits(data_dir, keyword, args["save-original"])
