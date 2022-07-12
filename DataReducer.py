@@ -18,11 +18,11 @@ warnings.filterwarnings("ignore", category=AstropyWarning, append=True)
 # configure loggers one for terminal one for file errors
 log = logging.Logger(name="DataReducerLog")
 formatter = logging.Formatter("%(name)s|%(asctime)s|[%(levelname)s]|:%(message)s")
-log.setLevel(logging.INFO)
+log.setLevel(logging.DEBUG)
 
 stream_handler = RichHandler()
 stream_handler.setLevel(logging.DEBUG) # change this to change terminal readout
-file_handler = logging.FileHandler(filename="debug.log", delay=True)
+file_handler = logging.FileHandler(filename="datareducer.log", delay=True)
 file_handler.setFormatter(formatter)
 file_handler.setLevel(logging.ERROR) # change this to change what is logged to file
 

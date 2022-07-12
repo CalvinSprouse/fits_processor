@@ -1,12 +1,9 @@
 import argparse
 import logging
 import os
-import time
 import warnings
-from pathlib import Path
 
 import ccdproc
-from astropy import units
 
 from astropy.nddata import CCDData
 from astropy.utils.exceptions import AstropyWarning
@@ -22,7 +19,7 @@ log.setLevel(logging.INFO)
 
 stream_handler = RichHandler()
 stream_handler.setLevel(logging.DEBUG) # change this to change terminal readout
-file_handler = logging.FileHandler(filename="debug.log", delay=True)
+file_handler = logging.FileHandler(filename="datafixer.log", delay=True)
 file_handler.setFormatter(formatter)
 file_handler.setLevel(logging.ERROR) # change this to change what is logged to file
 
@@ -38,6 +35,8 @@ def add_filter(dir: str):
                    "Bessel_V": ["BV", "BesselV"],
                    "Bessel_R": ["BR", "BesselR"],
                    "Bessel_U": ["BU", "BesselU"],
+                   "Bessel_B": ["BB", "BesselB"],
+                   "Bessel_I": ["BI", "BesselI"],
                    }
     for file in ccdproc.ImageFileCollection(dir).files_filtered(include_path=True):
         # get fits header
@@ -45,7 +44,7 @@ def add_filter(dir: str):
 
         # extract filter from filename
         for filter_name, filter_list in filter_dict.items():
-            if any(["_" + f + "_" in file for f in filter_list]):
+            if any(["_" + f.upper() + "_" in file.upper() for f in filter_list]):
                 log.info(f"File {file} identified as having filter {filter_name}.")
                 fits.meta["FILTER"] = filter_name
                 fits.write(file, overwrite=True)
