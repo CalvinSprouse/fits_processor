@@ -1,7 +1,6 @@
 # Ignore the large quantity of astro data
-RawData/
-SortedRawData/
-ProcessedData/
+TestData/
+ReducedData/
 *.DS_Store
 
 # Created by https://www.toptal.com/developers/gitignore/api/python,venv,pycharm

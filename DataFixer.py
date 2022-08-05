@@ -64,7 +64,25 @@ def add_bunit(dir: str):
             fits.write(file, overwrite=True)
             log.info(f"BUNIT='adu' added to {file}.")
 
+
+def fix_type(dir: str):
+    for file in ccdproc.ImageFileCollection(dir).files_filtered(include_path=True):
+        # get fits header
+        fits = CCDData.read(file)
+
+        # replace imtype if applicable
+        if fits.meta.get("IMTYPE") == "Flat":
+            fits.meta["IMTYPE"] = "Sky"
+
+            # save
+            fits.write(file, overwrite=True)
+            log.info(f"IMTYPE=Sky from Flat on {file}")
+
+
 if __name__ == "__main__":
+    """ Run data fixer to take "old" data and add in the filter keyword and a bunit keyword for astropy. """
+    # TODO: Standardize input argument format accross version
+
     # get arguments from command line
     parser = argparse.ArgumentParser()
     parser.add_argument("DataDir", type=str,
@@ -73,6 +91,8 @@ if __name__ == "__main__":
                         help="Ensure all data has the BUNIT='adu' fits data entry.")
     parser.add_argument("-f", "--filter", action="store_true",
                         help="Add FILTER= to fits header based on filename")
+    parser.add_argument("-i", "--imtype", action="store_true",
+                        help="Replace IMTYPE=Flat with IMTYPE=Sky for flats")
     args = parser.parse_args().__dict__
 
     # ensure theres is raw data to sort
@@ -80,8 +100,8 @@ if __name__ == "__main__":
         log.error(f"User specified path {args['DataDir']} does not exist.")
         exit()
 
-    if args["unit"]:
-        add_bunit(args["DataDir"])
+    if args["unit"]: add_bunit(args["DataDir"])
 
-    if args["filter"]:
-        add_filter(args["DataDir"])
+    if args["filter"]: add_filter(args["DataDir"])
+
+    if args["imtype"]: fix_type(args["DataDir"])
