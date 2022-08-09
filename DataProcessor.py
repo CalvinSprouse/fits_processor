@@ -1,5 +1,7 @@
 import argparse
 from doctest import master
+from functools import reduce
+from xml.etree.ElementInclude import include
 import ccdproc
 import logging
 import os
@@ -76,7 +78,9 @@ class CalibrationImages:
         master_bias_path = Path(self.master_dir, filename)
         safe_write_ccddata(master_bias_path, master_bias, self.overwrite)
         self.master_bias = master_bias_path
-        return self.master_bias_path
+
+        log.info(f"Created master bias from {len(bias_fits)} files > {master_bias_path}")
+        return master_bias_path
 
 
     def create_master_darks(self, method: str = "median", filename: str = "MasterDark") -> dict:
@@ -90,7 +94,7 @@ class CalibrationImages:
         dark_dict = {}
 
         # loop over unique dark times to create a master dark for each
-        for exp_time in dark_times:
+        for exp_time in tqdm(dark_times, desc="Creating Master Darks"):
             selected_darks = self.raw_fits.files_filtered(IMTYPE="Dark", EXPTIME=exp_time, include_path=True)
 
             # combine selected darks
@@ -103,6 +107,9 @@ class CalibrationImages:
             master_dark_path = Path(self.master_dir, f"{filename}_{exp_to_str(exp_time)}.fits")
             safe_write_ccddata(master_dark_path, master_dark, self.overwrite)
             dark_dict[exp_to_str(exp_time)] = master_dark_path
+
+        log.info(f"Created master darks for times {dark_times} > {self.master_dir}")
+        self.master_dark_dict = dark_dict
         return dark_dict
 
 
@@ -116,8 +123,8 @@ class CalibrationImages:
         # init flat dict and masters and loop over each filter
         flat_dict = {}
         master_bias = CCDData.read(self.master_bias)
-        master_darks = {k:CCDData.read(v) for k, v in self.master_dark_dict.items()}
-        for flat_filter in flat_filters:
+        master_darks = {k:CCDData.read(v) for k, v in tqdm(self.master_dark_dict.items(), desc="Loading Darks")}
+        for flat_filter in tqdm(flat_filters, desc="Creating Flats"):
             selected_flats = self.raw_fits.files_filtered(IMTYPE="Sky", FILTER=flat_filter, include_path=True)
 
             # read and dark subtract each flat fit (could have a unique time)
@@ -128,18 +135,27 @@ class CalibrationImages:
                 fit_exposure = fit.meta.get("EXPTIME")
 
                 # bias and dark subtract
-                fit = fit.subtract_bias(fit, master_bias)
-                fit = fit.subtract_dark(fit, master_darks[exp_to_str(fit_exposure)], dark_exposure=fit_exposure*units.s, flat_exposure=fit_exposure*units.s)
+                fit = ccdproc.subtract_bias(fit, master_bias)
+                fit = ccdproc.subtract_dark(fit, master_darks[exp_to_str(fit_exposure)],
+                                            dark_exposure=fit_exposure*units.s, data_exposure=fit_exposure*units.s)
+
+                # add fit to fit list for combining
+                fit_list.append(fit)
 
             # combine fits and save
             master_flat = ccdproc.combine(fit_list, method=method)
+            master_flat.meta[self.program_flag] = True
+
             master_flat_filename = Path(self.master_dir, f"{filename}_{flat_filter}.fits")
             safe_write_ccddata(master_flat_filename, master_flat, self.overwrite)
             flat_dict[flat_filter] = master_flat_filename
+
+        log.info(f"Created master flats for filters {flat_filters} > {self.master_dir}")
+        self.master_flat_dict = flat_dict
         return flat_dict
 
 
-    def find_calibration_images(self, only_with_flag: bool = True) -> tuple(Path, dict, dict):
+    def find_calibration_images(self, only_with_flag: bool = True) -> tuple[Path, dict, dict]:
         """ Find calibration images in the master dir and return a tuple of bias, darks, flats"""
         master_fits = ccdproc.ImageFileCollection(self.master_dir)
 
@@ -173,7 +189,7 @@ class CalibrationImages:
         return (self.master_bias, self.master_dark_dict, self.master_flat_dict)
 
 
-    def get_calibration_images(self) -> tuple(Path, dict, dict):
+    def get_calibration_images(self) -> tuple[Path, dict, dict]:
         """ Return the master bias, master dark dict, and master flat dict """
         return (self.master_bias, self.master_dark_dict, self.master_flat_dict)
 
@@ -188,9 +204,41 @@ class CalibrationImages:
 
     def reduce_lights(self, reduced_data_dir: Path, object_sort: bool = False, filter_sort: bool = False):
         """ Reduce all lights found in the data dir and move the reduced files to the reduced data dir, optional sorting methods"""
-        pass
+        light_fits = self.raw_fits.files_filtered(IMTYPE="Light", include_path=True)
+
+        # get masters
+        master_bias = CCDData.read(self.master_bias)
+        master_darks = {k:CCDData.read(v) for k, v in tqdm(self.master_dark_dict.items(), desc="Loading Darks")}
+        master_flats = {k:CCDData.read(v) for k, v in tqdm(self.master_flat_dict.items(), desc="Loading Flats")}
+
+        # iterate over every fit and reduce and resave
+        for fit in tqdm(light_fits, desc="Reducing lights"):
+            fit_ccd = CCDData.read(fit)
+            exp_time = fit_ccd.meta.get("EXPTIME")
+            exp_str = exp_to_str(exp_time)
+            fit_filter = fit_ccd.meta.get("FILTER")
+
+            # reduce fit
+            reduced_fit = ccdproc.subtract_bias(fit_ccd, master_bias)
+            reduced_fit = ccdproc.subtract_dark(reduced_fit, master_darks[exp_str],
+                                                dark_exposure=exp_time*units.s, data_exposure=exp_time*units.s)
+            reduced_fit = ccdproc.flat_correct(reduced_fit, master_flats[fit_filter])
+
+            # save
+            fit_path_list = [reduced_data_dir]
+            if object_sort: fit_path_list.append(fit_ccd.meta.get("OBJECT"))
+            if filter_sort: fit_path_list.append(fit_ccd.meta.get("FILTER"))
+            fit_path_list.append(os.path.basename(fit))
+
+            fit_path = Path(*fit_path_list)
+            safe_write_ccddata(fit_path, reduced_fit, self.overwrite)
 
 
+
+
+
+
+# TODO: Add logging
 if __name__ == "__main__":
     """ Run data reducer to.. reduce the data """
     # get arguments from command line
@@ -207,18 +255,23 @@ if __name__ == "__main__":
     args = parser.parse_args().__dict__
 
     # arg processing
-    if not args["master-dir"]: args["master-dir"] = args["reduced_dir"]
+    if not args["master_dir"]: args["master_dir"] = args["reduced_dir"]
 
     # create a reducer object
     reducer = CalibrationImages(args["raw_dir"], args["master_dir"], args["overwrite"])
 
     # get or create calibration images
-    if args["create-calibration"]:
+    if args["create_calibration"]:
+        log.info("Creating calibration images")
         reducer.create_master_bias()
         reducer.create_master_darks()
         reducer.create_master_flat()
     else:
-        reducer.find_calibration_images()
+        log.info("Loading calibration images")
+        bias, dark, flat = reducer.find_calibration_images()
+        log.info(f"{bias}\n{dark}\n{flat}")
 
     # reduce lights
-    if args["lights"]: reducer.reduce_lights(args["reduced_dir"], args["target-sort"], args["filter-sort"])
+    if args["lights"]:
+        log.info("Reducing lights")
+        reducer.reduce_lights(args["reduced_dir"], args["target_sort"], args["filter_sort"])
